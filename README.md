@@ -4,16 +4,17 @@ API Gateway for the FinTech Core Platform.
 
 The gateway is the public entrypoint for backend APIs. It routes `/api/**`
 requests to domain services and handles cross-cutting concerns such as
-correlation ID propagation, basic request logging, health checks, and future
-authentication/rate limiting.
+JWT validation, correlation ID propagation, basic request logging, and health
+checks.
 
 ## Responsibilities
 
 - Route `/api/**` requests to backend services
+- Validate Bearer access tokens for protected APIs
 - Propagate `X-Correlation-Id`
 - Apply basic request logging
 - Expose health and gateway info endpoints
-- Prepare for authentication, authorization, rate limiting, and observability
+- Prepare for authorization, rate limiting, and observability
 
 ## Non-Responsibilities
 
@@ -42,11 +43,28 @@ The gateway must not contain business logic. It must not:
 Each route uses `StripPrefix=1`, so `/api/payments/ping` is forwarded to the
 payment service as `/payments/ping`.
 
+## Security
+
+The gateway is an OAuth2 resource server using HS256 JWT validation. Public
+endpoints are:
+
+- `/api/auth/**`
+- `/actuator/health`
+- `/actuator/info`
+- `/gateway/info`
+
+All other `/api/**` routes require `Authorization: Bearer <access-token>`.
+Use the same `JWT_ISSUER` and `JWT_SECRET` values in auth-service and gateway
+so tokens issued by auth-service can be validated at the gateway.
+
 ## Configuration
 
 Override service targets with environment variables:
 
 ```bash
+JWT_ISSUER=fintech-auth-service
+JWT_SECRET=change-me-to-a-long-random-secret-at-least-32-chars
+
 AUTH_SERVICE_URI=http://localhost:8081
 USER_SERVICE_URI=http://localhost:8082
 KYC_SERVICE_URI=http://localhost:8083
@@ -79,5 +97,6 @@ curl http://localhost:8080/gateway/info
 
 ```bash
 curl -H "X-Correlation-Id: test-corr-001" \
+  -H "Authorization: Bearer <access-token>" \
   http://localhost:8080/api/payments/ping
 ```

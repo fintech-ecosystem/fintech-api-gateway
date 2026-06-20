@@ -5,11 +5,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Date;
+import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JOSEObjectType;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.crypto.MACSigner;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
@@ -32,6 +43,8 @@ class FintechApiGatewayApplicationTests {
 	private static final ExecutorService BACKEND_EXECUTOR = Executors.newSingleThreadExecutor();
 	private static final HttpServer BACKEND = startBackend();
 	private static final String BACKEND_URI = "http://localhost:" + BACKEND.getAddress().getPort();
+	private static final String JWT_ISSUER = "fintech-auth-service";
+	private static final String JWT_SECRET = "test-secret-with-at-least-32-bytes-long";
 
 	@Autowired
 	private RouteDefinitionLocator routeDefinitionLocator;
@@ -117,6 +130,7 @@ class FintechApiGatewayApplicationTests {
 				.build()
 				.get()
 				.uri("/api/payments/ping")
+				.headers(headers -> headers.setBearerAuth(accessToken()))
 				.header(CorrelationIdGatewayFilter.CORRELATION_ID_HEADER, correlationId)
 				.exchange()
 				.expectStatus().isOk()
@@ -125,6 +139,21 @@ class FintechApiGatewayApplicationTests {
 				.jsonPath("$.path").isEqualTo("/payments/ping");
 
 		assertThat(LAST_CORRELATION_ID.get()).isEqualTo(correlationId);
+	}
+
+	@Test
+	void rejectsProtectedRouteWithoutAccessToken() {
+		LAST_CORRELATION_ID.set(null);
+
+		WebTestClient.bindToServer()
+				.baseUrl("http://localhost:" + port)
+				.build()
+				.get()
+				.uri("/api/payments/ping")
+				.exchange()
+				.expectStatus().isUnauthorized();
+
+		assertThat(LAST_CORRELATION_ID.get()).isNull();
 	}
 
 	@DynamicPropertySource
@@ -137,6 +166,8 @@ class FintechApiGatewayApplicationTests {
 		registry.add("PAYMENT_SERVICE_URI", () -> BACKEND_URI);
 		registry.add("RISK_SERVICE_URI", () -> BACKEND_URI);
 		registry.add("LOAN_SERVICE_URI", () -> BACKEND_URI);
+		registry.add("security.jwt.issuer", () -> JWT_ISSUER);
+		registry.add("security.jwt.secret", () -> JWT_SECRET);
 	}
 
 	@AfterAll
@@ -168,6 +199,33 @@ class FintechApiGatewayApplicationTests {
 		}
 		catch (IOException ex) {
 			throw new IllegalStateException("Failed to start mock backend", ex);
+		}
+	}
+
+	private static String accessToken() {
+		try {
+			Instant now = Instant.now();
+			JWTClaimsSet claims = new JWTClaimsSet.Builder()
+					.issuer(JWT_ISSUER)
+					.subject(UUID.randomUUID().toString())
+					.issueTime(Date.from(now))
+					.expirationTime(Date.from(now.plusSeconds(900)))
+					.claim("email", "customer@example.com")
+					.claim("roles", List.of("CUSTOMER"))
+					.claim("scope", "ROLE_CUSTOMER")
+					.claim("token_use", "access")
+					.build();
+
+			SignedJWT jwt = new SignedJWT(
+					new JWSHeader.Builder(JWSAlgorithm.HS256)
+							.type(JOSEObjectType.JWT)
+							.build(),
+					claims);
+			jwt.sign(new MACSigner(JWT_SECRET.getBytes(StandardCharsets.UTF_8)));
+			return jwt.serialize();
+		}
+		catch (JOSEException ex) {
+			throw new IllegalStateException("Failed to sign test access token", ex);
 		}
 	}
 

@@ -73,6 +73,11 @@ spring:
 server:
   port: ${SERVER_PORT:8080}
 
+security:
+  jwt:
+    issuer: ${JWT_ISSUER:fintech-auth-service}
+    secret: ${JWT_SECRET:change-me-to-a-long-random-secret-at-least-32-chars}
+
 management:
   endpoints:
     web:
